@@ -1,0 +1,23 @@
+{
+  "name": "ddos-guardian",
+  "version": "1.0.0",
+  "description": "Standalone DDoS protection layer for containerized applications",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node tests/config.test.js && node tests/environment.test.js",
+    "test:config": "node tests/config.test.js",
+    "test:env": "node tests/environment.test.js"
+  },
+  "keywords": ["ddos", "protection", "security", "rate-limiting", "docker"],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "joi": "^18.0.2"
+  }
+}
