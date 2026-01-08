@@ -6,10 +6,11 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node tests/config.test.js && node tests/environment.test.js && node tests/logging.test.js",
+    "test": "node tests/config.test.js && node tests/environment.test.js && node tests/logging.test.js && node tests/core.test.js",
     "test:config": "node tests/config.test.js",
     "test:env": "node tests/environment.test.js",
-    "test:logging": "node tests/logging.test.js"
+    "test:logging": "node tests/logging.test.js",
+    "test:core": "node tests/core.test.js"
   },
   "keywords": ["ddos", "protection", "security", "rate-limiting", "docker"],
   "author": "",
