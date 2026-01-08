@@ -113,9 +113,12 @@ const config = {
         logs: rawConfig.LOG_DIR || path.join(ROOT_DIR, 'logs'),
     },
     
-    // Docker detection (will be updated in Milestone 2)
+    // Docker detection (uses environment utility)
     docker: {
-        isRunning: rawConfig.RUNNING_IN_DOCKER,
+        get isRunning() {
+            const { environment } = require('../utils');
+            return environment.isDocker;
+        },
     },
     
     /**
