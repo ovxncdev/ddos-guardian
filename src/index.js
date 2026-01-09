@@ -5,6 +5,7 @@
  * Supports auto-discovery of Docker containers.
  * Includes Admin API for whitelist/blacklist management.
  * Supports SSL/HTTPS termination.
+ * Integrates IP reputation checking (AbuseIPDB).
  * 
  * Run: node src/index.js
  */
@@ -13,7 +14,7 @@ const http = require('http');
 const https = require('https');
 const config = require('./config');
 const logger = require('./logging');
-const { Proxy, DockerDiscovery } = require('./core');
+const { Proxy, DockerDiscovery, IPReputation } = require('./core');
 const SSLManager = require('./core/ssl-manager');
 const {
     rateLimitMiddleware,
@@ -21,6 +22,7 @@ const {
     securityHeadersMiddleware,
     loggerMiddleware,
     botDetectionMiddleware,
+    ipReputationMiddleware,
 } = require('./middleware');
 
 // Track current upstreams for dynamic updates
@@ -56,17 +58,32 @@ const initMiddleware = () => {
         skipPaths: ['/health', '/ready'],
     });
     
+    // IP Reputation middleware
+    const ipReputation = ipReputationMiddleware({
+        apiKey: config.ipReputation.apiKey,
+        blockThreshold: config.ipReputation.blockThreshold,
+        warnThreshold: config.ipReputation.warnThreshold,
+        checkMode: config.ipReputation.checkMode,
+        cacheTTL: config.ipReputation.cacheTTL,
+        blockEnabled: config.ipReputation.enabled && !!config.ipReputation.apiKey,
+        trustProxy: config.security.trustProxy,
+        stealth: config.security.stealthMode,
+        dataDir: config.paths.data,
+    });
+    
     return {
         requestId,
         securityHeaders,
         botDetection,
         rateLimit,
         requestLogger,
+        ipReputation,
         
         // Cleanup function
         destroy: () => {
             rateLimit.destroy();
             botDetection.destroy();
+            ipReputation.destroy();
         },
     };
 };
@@ -92,7 +109,10 @@ const runMiddleware = (middlewares, req, res) => {
             const middleware = middlewares[index++];
             if (middleware) {
                 try {
-                    middleware(req, res, next);
+                    const result = middleware(req, res, next);
+                    if (result && typeof result.then === 'function') {
+                        result.catch(reject);
+                    }
                 } catch (e) {
                     reject(e);
                 }
@@ -202,6 +222,7 @@ const initUpstreams = async (discovery) => {
 const handleAdminApi = async (req, res, path, middleware, sslManager) => {
     const method = req.method;
     const limiter = middleware.rateLimit.limiter;
+    const reputation = middleware.ipReputation.reputation;
     
     try {
         // GET /api/whitelist - List whitelisted IPs
@@ -227,6 +248,7 @@ const handleAdminApi = async (req, res, path, middleware, sslManager) => {
             }
             
             limiter.addToWhitelist(ip);
+            reputation.addToWhitelist(ip);
             return sendJson(res, 200, { 
                 success: true, 
                 message: `IP ${ip} added to whitelist`,
@@ -247,6 +269,7 @@ const handleAdminApi = async (req, res, path, middleware, sslManager) => {
             }
             
             limiter.removeFromWhitelist(ip);
+            reputation.removeFromWhitelist(ip);
             return sendJson(res, 200, { 
                 success: true, 
                 message: `IP ${ip} removed from whitelist`,
@@ -360,6 +383,45 @@ const handleAdminApi = async (req, res, path, middleware, sslManager) => {
             });
         }
         
+        // GET /api/reputation - Get IP reputation status
+        if (path === '/api/reputation' && method === 'GET') {
+            return sendJson(res, 200, {
+                success: true,
+                reputation: reputation.getStatus(),
+            });
+        }
+        
+        // GET /api/reputation/:ip - Check specific IP reputation
+        if (path.startsWith('/api/reputation/') && method === 'GET') {
+            const ip = decodeURIComponent(path.replace('/api/reputation/', ''));
+            
+            if (!ip || !isValidIp(ip)) {
+                return sendJson(res, 400, { success: false, error: 'Valid IP address required' });
+            }
+            
+            const result = await reputation.check(ip);
+            return sendJson(res, 200, {
+                success: true,
+                ip,
+                ...result,
+            });
+        }
+        
+        // POST /api/reputation/report - Report an IP to AbuseIPDB
+        if (path === '/api/reputation/report' && method === 'POST') {
+            const body = await parseBody(req);
+            const ip = body.ip?.trim();
+            const categories = body.categories || [IPReputation.Categories.HACKING];
+            const comment = body.comment || '';
+            
+            if (!ip || !isValidIp(ip)) {
+                return sendJson(res, 400, { success: false, error: 'Valid IP address required' });
+            }
+            
+            const result = await reputation.report(ip, categories, comment);
+            return sendJson(res, result.success ? 200 : 500, result);
+        }
+        
         // GET /api/config - Get current configuration
         if (path === '/api/config' && method === 'GET') {
             return sendJson(res, 200, {
@@ -379,6 +441,7 @@ const handleAdminApi = async (req, res, path, middleware, sslManager) => {
                         trustProxy: config.security.trustProxy,
                     },
                     ssl: sslManager ? sslManager.getStatus() : { enabled: false },
+                    ipReputation: reputation.getStatus(),
                 },
             });
         }
@@ -390,6 +453,7 @@ const handleAdminApi = async (req, res, path, middleware, sslManager) => {
                 rateLimit: limiter.getStats(),
                 botDetection: middleware.botDetection.detector.getStats(),
                 ssl: sslManager ? sslManager.getStats() : { enabled: false },
+                ipReputation: reputation.getStats(),
                 upstreams: currentUpstreams.length,
                 uptime: process.uptime(),
                 memory: process.memoryUsage(),
@@ -411,6 +475,9 @@ const handleAdminApi = async (req, res, path, middleware, sslManager) => {
                 'POST /api/block',
                 'POST /api/unblock',
                 'GET  /api/ssl',
+                'GET  /api/reputation',
+                'GET  /api/reputation/:ip',
+                'POST /api/reputation/report',
                 'GET  /api/config',
                 'GET  /api/stats',
             ],
@@ -453,10 +520,11 @@ const startServer = async () => {
         timeout: 30000,
     });
     
-    // Middleware order
+    // Middleware order (IP reputation runs early)
     const middlewareStack = [
         middleware.requestId,
         middleware.securityHeaders,
+        middleware.ipReputation,
         middleware.botDetection,
         middleware.rateLimit,
         middleware.requestLogger,
@@ -503,6 +571,7 @@ const startServer = async () => {
                     return sendJson(res, 200, {
                         rateLimit: middleware.rateLimit.limiter.getStats(),
                         botDetection: middleware.botDetection.detector.getStats(),
+                        ipReputation: middleware.ipReputation.getStats(),
                         proxy: proxy.getStats(),
                         ssl: sslManager.getStats(),
                         discovery: discovery ? discovery.getStats() : { available: false },
@@ -600,7 +669,7 @@ const startServer = async () => {
     }
     
     // Print startup banner
-    printBanner(currentUpstreams, sslManager);
+    printBanner(currentUpstreams, sslManager, middleware);
     
     // Start auto-refresh if discovery is enabled and available
     if (discovery && discovery.isAvailable) {
@@ -659,9 +728,12 @@ const startServer = async () => {
 /**
  * Print startup banner
  */
-const printBanner = (upstreams, sslManager) => {
+const printBanner = (upstreams, sslManager, middleware) => {
     const autoDiscover = config.discovery.enabled ? 'enabled' : 'disabled';
     const sslStatus = sslManager.credentials ? `enabled (${sslManager.certSource})` : 'disabled';
+    const reputationStatus = config.ipReputation.apiKey
+        ? `enabled (threshold: ${config.ipReputation.blockThreshold})`
+        : 'disabled (no API key)';
     
     console.log('');
     console.log('╔════════════════════════════════════════════════════════╗');
@@ -680,6 +752,7 @@ const printBanner = (upstreams, sslManager) => {
     console.log('║  Protection:                                           ║');
     console.log(`║    • Rate Limit: ${config.rateLimit.maxRequests} req/${Math.round(config.rateLimit.windowMs/1000)}s`.padEnd(57) + '║');
     console.log(`║    • Bot Detection: ${config.botDetection.enabled ? 'enabled' : 'disabled'}`.padEnd(57) + '║');
+    console.log(`║    • IP Reputation: ${reputationStatus}`.padEnd(57) + '║');
     console.log(`║    • Stealth Mode: ${config.security.stealthMode ? 'enabled' : 'disabled'}`.padEnd(57) + '║');
     console.log('╠════════════════════════════════════════════════════════╣');
     console.log('║  Endpoints:                                            ║');
@@ -702,6 +775,9 @@ const printBanner = (upstreams, sslManager) => {
     
     console.log('');
 };
+
+// Export IPReputation categories
+module.exports.IPReputationCategories = IPReputation.Categories;
 
 // Start if run directly
 if (require.main === module) {
