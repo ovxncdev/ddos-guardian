@@ -2,6 +2,7 @@
  * DDoS Guardian
  * 
  * Main entry point. Starts the protection proxy server.
+ * Supports auto-discovery of Docker containers.
  * 
  * Run: node src/index.js
  */
@@ -9,7 +10,7 @@
 const http = require('http');
 const config = require('./config');
 const logger = require('./logging');
-const { Proxy } = require('./core');
+const { Proxy, DockerDiscovery } = require('./core');
 const {
     rateLimitMiddleware,
     requestIdMiddleware,
@@ -109,12 +110,37 @@ const sendJson = (res, statusCode, data) => {
 /**
  * Create and start server
  */
-const startServer = () => {
+const startServer = async () => {
     // Initialize components
     const middleware = initMiddleware();
     
+    // Auto-discovery or manual upstreams
+    const autoDiscover = process.env.AUTO_DISCOVER !== 'false';
+    let discovery = null;
+    let upstreamHosts = config.upstream.hosts;
+
+    if (autoDiscover) {
+        logger.info('Auto-discovery enabled, scanning for containers...');
+        discovery = new DockerDiscovery();
+        
+        try {
+            await discovery.discoverUpstreams();
+            const discovered = discovery.getAllUpstreams();
+            
+            if (discovered.length > 0) {
+                upstreamHosts = discovered.map(u => u.url);
+                logger.info('Auto-discovered upstreams', { upstreams: upstreamHosts });
+            } else {
+                logger.warn('No containers discovered, using manual config');
+            }
+        } catch (e) {
+            logger.error('Auto-discovery failed', { error: e.message });
+            logger.info('Falling back to manual config');
+        }
+    }
+
     const proxy = new Proxy({
-        targets: config.upstream.hosts,
+        targets: upstreamHosts,
         timeout: 30000,
     });
     
@@ -150,10 +176,10 @@ const startServer = () => {
                     });
                 
                 case '/ready':
-                    const hasUpstream = config.upstream.hosts.length > 0;
+                    const hasUpstream = upstreamHosts.length > 0;
                     return sendJson(res, hasUpstream ? 200 : 503, {
                         ready: hasUpstream,
-                        upstreams: config.upstream.hosts.length,
+                        upstreams: upstreamHosts.length,
                     });
                 
                 case '/metrics':
@@ -161,13 +187,14 @@ const startServer = () => {
                         rateLimit: middleware.rateLimit.limiter.getStats(),
                         botDetection: middleware.botDetection.detector.getStats(),
                         proxy: proxy.getStats(),
+                        discovery: discovery ? discovery.getStats() : null,
                         uptime: process.uptime(),
                         memory: process.memoryUsage(),
                     });
                 
                 default:
                     // Forward to upstream
-                    if (config.upstream.hosts.length > 0) {
+                    if (upstreamHosts.length > 0) {
                         proxy.forward(req, res);
                     } else {
                         sendJson(res, 503, {
@@ -192,7 +219,8 @@ const startServer = () => {
         logger.info('DDoS Guardian started', {
             host: config.server.host,
             port: config.server.port,
-            upstreams: config.upstream.hosts,
+            upstreams: upstreamHosts,
+            autoDiscover: autoDiscover,
             env: config.env,
         });
         
@@ -202,7 +230,8 @@ const startServer = () => {
         console.log('╠════════════════════════════════════════════════════════╣');
         console.log(`║  Listening: http://${config.server.host}:${config.server.port}                    ║`);
         console.log(`║  Environment: ${config.env.padEnd(39)}║`);
-        console.log(`║  Upstreams: ${config.upstream.hosts.length.toString().padEnd(41)}║`);
+        console.log(`║  Auto-Discover: ${autoDiscover ? 'enabled' : 'disabled'}                              ║`);
+        console.log(`║  Upstreams: ${upstreamHosts.length.toString().padEnd(41)}║`);
         console.log('╠════════════════════════════════════════════════════════╣');
         console.log('║  Protection:                                           ║');
         console.log(`║    • Rate Limit: ${config.rateLimit.maxRequests} req/${Math.round(config.rateLimit.windowMs/1000)}s                          ║`);
@@ -214,12 +243,37 @@ const startServer = () => {
         console.log('║    /ready   - Readiness check                          ║');
         console.log('║    /metrics - Stats and metrics                        ║');
         console.log('╚════════════════════════════════════════════════════════╝');
+        
+        if (upstreamHosts.length > 0) {
+            console.log('');
+            console.log('  Protected services:');
+            upstreamHosts.forEach((u, i) => {
+                console.log(`    ${i + 1}. ${u}`);
+            });
+        }
+        
         console.log('');
     });
+    
+    // Start auto-refresh if discovery is enabled
+    if (discovery) {
+        discovery.startAutoRefresh((newUpstreams) => {
+            const newHosts = discovery.getAllUpstreams().map(u => u.url);
+            if (JSON.stringify(newHosts) !== JSON.stringify(upstreamHosts)) {
+                upstreamHosts = newHosts;
+                proxy.updateTargets(newHosts);
+                logger.info('Upstreams updated', { upstreams: newHosts });
+            }
+        });
+    }
     
     // Graceful shutdown
     const shutdown = (signal) => {
         logger.info(`Received ${signal}, shutting down...`);
+        
+        if (discovery) {
+            discovery.stopAutoRefresh();
+        }
         
         server.close(() => {
             middleware.destroy();
