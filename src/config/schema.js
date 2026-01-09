@@ -37,6 +37,23 @@ const schema = Joi.object({
         .description('Comma-separated list of upstream service URLs'),
 
     // ===================
+    // AUTO-DISCOVERY
+    // ===================
+    AUTO_DISCOVER: Joi.boolean()
+        .default(true)
+        .description('Auto-discover Docker containers'),
+
+    AUTO_DISCOVER_INTERVAL: Joi.number()
+        .integer()
+        .min(5000)
+        .default(30000)
+        .description('Interval for re-scanning containers (ms)'),
+
+    DOCKER_SOCKET_PATH: Joi.string()
+        .default('')
+        .description('Path to Docker socket (auto-detected if empty)'),
+
+    // ===================
     // RATE LIMITING
     // ===================
     RATE_LIMIT_WINDOW_MS: Joi.number()
