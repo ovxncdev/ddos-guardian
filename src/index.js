@@ -19,6 +19,9 @@ const {
     botDetectionMiddleware,
 } = require('./middleware');
 
+// Track current upstreams for dynamic updates
+let currentUpstreams = [];
+
 /**
  * Initialize middleware
  */
@@ -108,39 +111,66 @@ const sendJson = (res, statusCode, data) => {
 };
 
 /**
+ * Initialize upstreams from config or discovery
+ */
+const initUpstreams = async (discovery) => {
+    // Manual config takes priority if specified
+    if (config.upstream.hosts.length > 0) {
+        logger.info('Using manually configured upstreams', {
+            count: config.upstream.hosts.length,
+            upstreams: config.upstream.hosts,
+        });
+        return config.upstream.hosts;
+    }
+    
+    // Try auto-discovery
+    if (config.discovery.enabled && discovery && discovery.isAvailable) {
+        logger.info('Auto-discovery enabled, scanning for containers...');
+        
+        try {
+            await discovery.discoverUpstreams();
+            const discovered = discovery.getUpstreamUrls();
+            
+            if (discovered.length > 0) {
+                logger.info('Auto-discovered upstreams', { 
+                    count: discovered.length,
+                    upstreams: discovered,
+                });
+                return discovered;
+            } else {
+                logger.warn('No containers discovered');
+            }
+        } catch (e) {
+            logger.error('Auto-discovery failed', { error: e.message });
+        }
+    } else if (config.discovery.enabled) {
+        logger.warn('Auto-discovery enabled but Docker socket not available');
+    }
+    
+    // No upstreams found
+    logger.warn('No upstreams configured - requests will return 503');
+    return [];
+};
+
+/**
  * Create and start server
  */
 const startServer = async () => {
     // Initialize components
     const middleware = initMiddleware();
     
-    // Auto-discovery or manual upstreams
-    const autoDiscover = process.env.AUTO_DISCOVER !== 'false';
+    // Initialize discovery (may not be available)
     let discovery = null;
-    let upstreamHosts = config.upstream.hosts;
-
-    if (autoDiscover) {
-        logger.info('Auto-discovery enabled, scanning for containers...');
+    if (config.discovery.enabled) {
         discovery = new DockerDiscovery();
-        
-        try {
-            await discovery.discoverUpstreams();
-            const discovered = discovery.getAllUpstreams();
-            
-            if (discovered.length > 0) {
-                upstreamHosts = discovered.map(u => u.url);
-                logger.info('Auto-discovered upstreams', { upstreams: upstreamHosts });
-            } else {
-                logger.warn('No containers discovered, using manual config');
-            }
-        } catch (e) {
-            logger.error('Auto-discovery failed', { error: e.message });
-            logger.info('Falling back to manual config');
-        }
     }
-
+    
+    // Get initial upstreams
+    currentUpstreams = await initUpstreams(discovery);
+    
+    // Initialize proxy
     const proxy = new Proxy({
-        targets: upstreamHosts,
+        targets: currentUpstreams,
         timeout: 30000,
     });
     
@@ -176,10 +206,10 @@ const startServer = async () => {
                     });
                 
                 case '/ready':
-                    const hasUpstream = upstreamHosts.length > 0;
+                    const hasUpstream = currentUpstreams.length > 0;
                     return sendJson(res, hasUpstream ? 200 : 503, {
                         ready: hasUpstream,
-                        upstreams: upstreamHosts.length,
+                        upstreams: currentUpstreams.length,
                     });
                 
                 case '/metrics':
@@ -187,14 +217,14 @@ const startServer = async () => {
                         rateLimit: middleware.rateLimit.limiter.getStats(),
                         botDetection: middleware.botDetection.detector.getStats(),
                         proxy: proxy.getStats(),
-                        discovery: discovery ? discovery.getStats() : null,
+                        discovery: discovery ? discovery.getStats() : { available: false },
                         uptime: process.uptime(),
                         memory: process.memoryUsage(),
                     });
                 
                 default:
                     // Forward to upstream
-                    if (upstreamHosts.length > 0) {
+                    if (currentUpstreams.length > 0) {
                         proxy.forward(req, res);
                     } else {
                         sendJson(res, 503, {
@@ -204,7 +234,7 @@ const startServer = async () => {
                     }
             }
         } catch (err) {
-            logger.error('Request handler error', { error: err.message });
+            logger.error('Request handler error', { error: err.message, stack: err.stack });
             if (!res.headersSent) {
                 sendJson(res, 500, { error: 'Internal Server Error' });
             }
@@ -214,55 +244,48 @@ const startServer = async () => {
     // Create server
     const server = http.createServer(handleRequest);
     
+    // Handle server errors
+    server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+            logger.error(`Port ${config.server.port} is already in use`);
+        } else if (err.code === 'EACCES') {
+            logger.error(`Permission denied for port ${config.server.port}`);
+        } else {
+            logger.error('Server error', { error: err.message });
+        }
+        process.exit(1);
+    });
+    
     // Start listening
     server.listen(config.server.port, config.server.host, () => {
         logger.info('DDoS Guardian started', {
             host: config.server.host,
             port: config.server.port,
-            upstreams: upstreamHosts,
-            autoDiscover: autoDiscover,
+            upstreams: currentUpstreams,
+            autoDiscover: config.discovery.enabled,
             env: config.env,
         });
         
-        console.log('');
-        console.log('╔════════════════════════════════════════════════════════╗');
-        console.log('║              DDoS Guardian Started                     ║');
-        console.log('╠════════════════════════════════════════════════════════╣');
-        console.log(`║  Listening: http://${config.server.host}:${config.server.port}                    ║`);
-        console.log(`║  Environment: ${config.env.padEnd(39)}║`);
-        console.log(`║  Auto-Discover: ${autoDiscover ? 'enabled' : 'disabled'}                              ║`);
-        console.log(`║  Upstreams: ${upstreamHosts.length.toString().padEnd(41)}║`);
-        console.log('╠════════════════════════════════════════════════════════╣');
-        console.log('║  Protection:                                           ║');
-        console.log(`║    • Rate Limit: ${config.rateLimit.maxRequests} req/${Math.round(config.rateLimit.windowMs/1000)}s                          ║`);
-        console.log(`║    • Bot Detection: ${config.botDetection.enabled ? 'enabled' : 'disabled'}                           ║`);
-        console.log(`║    • Stealth Mode: ${config.security.stealthMode ? 'enabled' : 'disabled'}                            ║`);
-        console.log('╠════════════════════════════════════════════════════════╣');
-        console.log('║  Endpoints:                                            ║');
-        console.log('║    /health  - Health check                             ║');
-        console.log('║    /ready   - Readiness check                          ║');
-        console.log('║    /metrics - Stats and metrics                        ║');
-        console.log('╚════════════════════════════════════════════════════════╝');
-        
-        if (upstreamHosts.length > 0) {
-            console.log('');
-            console.log('  Protected services:');
-            upstreamHosts.forEach((u, i) => {
-                console.log(`    ${i + 1}. ${u}`);
-            });
-        }
-        
-        console.log('');
+        // Print startup banner
+        printBanner(currentUpstreams);
     });
     
-    // Start auto-refresh if discovery is enabled
-    if (discovery) {
-        discovery.startAutoRefresh((newUpstreams) => {
-            const newHosts = discovery.getAllUpstreams().map(u => u.url);
-            if (JSON.stringify(newHosts) !== JSON.stringify(upstreamHosts)) {
-                upstreamHosts = newHosts;
-                proxy.updateTargets(newHosts);
-                logger.info('Upstreams updated', { upstreams: newHosts });
+    // Start auto-refresh if discovery is enabled and available
+    if (discovery && discovery.isAvailable) {
+        discovery.startAutoRefresh(() => {
+            const newUpstreams = discovery.getUpstreamUrls();
+            
+            // Check if upstreams changed
+            const oldSorted = [...currentUpstreams].sort().join(',');
+            const newSorted = [...newUpstreams].sort().join(',');
+            
+            if (oldSorted !== newSorted) {
+                currentUpstreams = newUpstreams;
+                proxy.updateTargets(newUpstreams);
+                logger.info('Upstreams updated via auto-discovery', { 
+                    count: newUpstreams.length,
+                    upstreams: newUpstreams,
+                });
             }
         });
     }
@@ -272,7 +295,7 @@ const startServer = async () => {
         logger.info(`Received ${signal}, shutting down...`);
         
         if (discovery) {
-            discovery.stopAutoRefresh();
+            discovery.destroy();
         }
         
         server.close(() => {
@@ -294,9 +317,52 @@ const startServer = async () => {
     return server;
 };
 
+/**
+ * Print startup banner
+ */
+const printBanner = (upstreams) => {
+    const autoDiscover = config.discovery.enabled ? 'enabled' : 'disabled';
+    
+    console.log('');
+    console.log('╔════════════════════════════════════════════════════════╗');
+    console.log('║              DDoS Guardian Started                     ║');
+    console.log('╠════════════════════════════════════════════════════════╣');
+    console.log(`║  Listening: http://${config.server.host}:${config.server.port}`.padEnd(57) + '║');
+    console.log(`║  Environment: ${config.env}`.padEnd(57) + '║');
+    console.log(`║  Auto-Discover: ${autoDiscover}`.padEnd(57) + '║');
+    console.log(`║  Upstreams: ${upstreams.length}`.padEnd(57) + '║');
+    console.log('╠════════════════════════════════════════════════════════╣');
+    console.log('║  Protection:                                           ║');
+    console.log(`║    • Rate Limit: ${config.rateLimit.maxRequests} req/${Math.round(config.rateLimit.windowMs/1000)}s`.padEnd(57) + '║');
+    console.log(`║    • Bot Detection: ${config.botDetection.enabled ? 'enabled' : 'disabled'}`.padEnd(57) + '║');
+    console.log(`║    • Stealth Mode: ${config.security.stealthMode ? 'enabled' : 'disabled'}`.padEnd(57) + '║');
+    console.log('╠════════════════════════════════════════════════════════╣');
+    console.log('║  Endpoints:                                            ║');
+    console.log('║    /health  - Health check                             ║');
+    console.log('║    /ready   - Readiness check                          ║');
+    console.log('║    /metrics - Stats and metrics                        ║');
+    console.log('╚════════════════════════════════════════════════════════╝');
+    
+    if (upstreams.length > 0) {
+        console.log('');
+        console.log('  Protected services:');
+        upstreams.forEach((u, i) => {
+            console.log(`    ${i + 1}. ${u}`);
+        });
+    } else {
+        console.log('');
+        console.log('  ⚠ No upstreams configured - waiting for containers...');
+    }
+    
+    console.log('');
+};
+
 // Start if run directly
 if (require.main === module) {
-    startServer();
+    startServer().catch((err) => {
+        logger.error('Failed to start server', { error: err.message, stack: err.stack });
+        process.exit(1);
+    });
 }
 
 module.exports = { startServer };
