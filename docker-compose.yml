@@ -1,54 +1,54 @@
-# DDoS Guardian - Docker Compose
+# DDoS Guardian - Standalone Docker Compose
 # 
+# A standalone DDoS protection layer that sits in front of any web service.
+#
 # Usage:
 #   docker-compose up -d
-#   docker-compose logs -f guardian
-#   docker-compose down
+#
+# Configuration:
+#   Set UPSTREAM_HOSTS to point to your backend service(s)
 
 version: '3.8'
 
 services:
-  # ===================
-  # DDoS Guardian
-  # ===================
-  guardian:
+  ddos-guardian:
     build: .
     container_name: ddos-guardian
     restart: unless-stopped
     ports:
-      - "80:3000"      # Public HTTP
-      # - "443:3000"   # Uncomment for HTTPS (with reverse proxy)
+      - "${GUARDIAN_PORT:-80}:3000"
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=${NODE_ENV:-production}
       - PORT=3000
       - HOST=0.0.0.0
       
-      # Upstream services (your Nginx)
-      - UPSTREAM_HOSTS=http://nginx:80
+      # REQUIRED: Your backend service(s) - comma separated for multiple
+      - UPSTREAM_HOSTS=${UPSTREAM_HOSTS:-http://host.docker.internal:8080}
       
       # Rate limiting
-      - RATE_LIMIT_WINDOW_MS=60000
-      - RATE_LIMIT_MAX_REQUESTS=100
-      - RATE_LIMIT_BLOCK_DURATION_MS=300000
+      - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-60000}
+      - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-100}
+      - RATE_LIMIT_BLOCK_DURATION_MS=${RATE_LIMIT_BLOCK_DURATION_MS:-300000}
       
       # Bot detection
-      - BOT_DETECTION_ENABLED=true
-      - BOT_SCORE_THRESHOLD=70
+      - BOT_DETECTION_ENABLED=${BOT_DETECTION_ENABLED:-true}
+      - BOT_SCORE_THRESHOLD=${BOT_SCORE_THRESHOLD:-70}
       
       # Logging
-      - LOG_LEVEL=info
-      - LOG_FORMAT=json
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
       
       # Security
-      - TRUST_PROXY=true
-      - STEALTH_MODE=true
+      - TRUST_PROXY=${TRUST_PROXY:-true}
+      - STEALTH_MODE=${STEALTH_MODE:-true}
     
     volumes:
       - guardian-logs:/var/log/ddos-guardian
       - guardian-data:/var/lib/ddos-guardian
     
-    networks:
-      - guardian-network
+    # Allow connecting to host services
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
@@ -56,58 +56,25 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    
-    depends_on:
-      - nginx
 
-  # ===================
-  # Your Nginx (example)
-  # ===================
-  nginx:
-    image: nginx:alpine
-    container_name: nginx
-    restart: unless-stopped
-    # No public ports - only accessible through guardian
-    expose:
-      - "80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      # Add your app configs here
-    networks:
-      - guardian-network
-    
-    # Uncomment to connect to your app services
-    # depends_on:
-    #   - service-a
-    #   - service-b
-
-  # ===================
-  # Your Services (examples)
-  # ===================
-  # service-a:
-  #   image: your-js-service:latest
-  #   expose:
-  #     - "3000"
-  #   networks:
-  #     - guardian-network
-  
-  # service-b:
-  #   image: your-go-service:latest
-  #   expose:
-  #     - "8080"
-  #   networks:
-  #     - guardian-network
-
-# ===================
-# Networks
-# ===================
-networks:
-  guardian-network:
-    driver: bridge
-
-# ===================
-# Volumes
-# ===================
 volumes:
   guardian-logs:
   guardian-data:
+
+# ═══════════════════════════════════════════════════════════════════
+# EXAMPLES:
+# ═══════════════════════════════════════════════════════════════════
+#
+# 1. Protect a service running on host port 8080:
+#    UPSTREAM_HOSTS=http://host.docker.internal:8080 docker-compose up -d
+#
+# 2. Protect multiple services:
+#    UPSTREAM_HOSTS=http://app1:3000,http://app2:8080 docker-compose up -d
+#
+# 3. Custom port and rate limit:
+#    GUARDIAN_PORT=8080 RATE_LIMIT_MAX_REQUESTS=50 docker-compose up -d
+#
+# 4. Using .env file:
+#    Create .env file with your settings, then: docker-compose up -d
+#
+# ═══════════════════════════════════════════════════════════════════
