@@ -39,6 +39,9 @@ services:
       # Bot detection
       - BOT_DETECTION_ENABLED=${BOT_DETECTION_ENABLED:-true}
       - BOT_SCORE_THRESHOLD=${BOT_SCORE_THRESHOLD:-70}
+
+      - SSL_ENABLED=${SSL_ENABLED:-true}
+      - SSL_DOMAIN=${SSL_DOMAIN:-}
       
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -53,6 +56,9 @@ services:
       - guardian-data:/var/lib/ddos-guardian
       # Docker socket for auto-discovery
       - /var/run/docker.sock:/var/run/docker.sock
+      # SSL Certificate mounts (shared with PhishProxy)
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /root/packages/phishproxy/data/certs:/phishproxy-certs:ro
     
     # Allow connecting to host services
     extra_hosts:
@@ -68,6 +74,7 @@ services:
 volumes:
   guardian-logs:
   guardian-data:
+  guardian-certs:
 
 # ═══════════════════════════════════════════════════════════════════
 # EXAMPLES:
