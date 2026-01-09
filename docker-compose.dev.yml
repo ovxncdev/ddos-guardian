@@ -1,0 +1,90 @@
+# DDoS Guardian - Development Docker Compose
+# 
+# Usage:
+#   docker-compose -f docker-compose.dev.yml up
+#
+# This creates a full test environment with mock services.
+
+version: '3.8'
+
+services:
+  # ===================
+  # DDoS Guardian
+  # ===================
+  guardian:
+    build: .
+    container_name: ddos-guardian-dev
+    ports:
+      - "3333:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - UPSTREAM_HOSTS=http://mock-nginx:80
+      - RATE_LIMIT_WINDOW_MS=60000
+      - RATE_LIMIT_MAX_REQUESTS=10
+      - RATE_LIMIT_BLOCK_DURATION_MS=30000
+      - BOT_DETECTION_ENABLED=true
+      - BOT_SCORE_THRESHOLD=70
+      - LOG_LEVEL=debug
+      - LOG_FORMAT=pretty
+      - STEALTH_MODE=false
+    networks:
+      - dev-network
+    depends_on:
+      - mock-nginx
+
+  # ===================
+  # Mock Nginx
+  # ===================
+  mock-nginx:
+    image: nginx:alpine
+    container_name: mock-nginx
+    expose:
+      - "80"
+    volumes:
+      - ./tests/mock-nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - dev-network
+    depends_on:
+      - mock-service-js
+      - mock-service-go
+
+  # ===================
+  # Mock JS Service
+  # ===================
+  mock-service-js:
+    image: node:20-alpine
+    container_name: mock-service-js
+    working_dir: /app
+    command: node server.js
+    expose:
+      - "3000"
+    volumes:
+      - ./tests/mock-services:/app:ro
+    environment:
+      - SERVICE_NAME=js-service
+      - PORT=3000
+    networks:
+      - dev-network
+
+  # ===================
+  # Mock Go Service
+  # ===================
+  mock-service-go:
+    image: node:20-alpine
+    container_name: mock-service-go
+    working_dir: /app
+    command: node server.js
+    expose:
+      - "8080"
+    volumes:
+      - ./tests/mock-services:/app:ro
+    environment:
+      - SERVICE_NAME=go-service
+      - PORT=8080
+    networks:
+      - dev-network
+
+networks:
+  dev-network:
+    driver: bridge
