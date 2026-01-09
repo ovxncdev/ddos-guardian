@@ -4,14 +4,17 @@
  * Main entry point. Starts the protection proxy server.
  * Supports auto-discovery of Docker containers.
  * Includes Admin API for whitelist/blacklist management.
+ * Supports SSL/HTTPS termination.
  * 
  * Run: node src/index.js
  */
 
 const http = require('http');
+const https = require('https');
 const config = require('./config');
 const logger = require('./logging');
 const { Proxy, DockerDiscovery } = require('./core');
+const SSLManager = require('./core/ssl-manager');
 const {
     rateLimitMiddleware,
     requestIdMiddleware,
@@ -196,7 +199,7 @@ const initUpstreams = async (discovery) => {
 /**
  * Handle Admin API requests
  */
-const handleAdminApi = async (req, res, path, middleware) => {
+const handleAdminApi = async (req, res, path, middleware, sslManager) => {
     const method = req.method;
     const limiter = middleware.rateLimit.limiter;
     
@@ -349,6 +352,14 @@ const handleAdminApi = async (req, res, path, middleware) => {
             });
         }
         
+        // GET /api/ssl - Get SSL status
+        if (path === '/api/ssl' && method === 'GET') {
+            return sendJson(res, 200, {
+                success: true,
+                ssl: sslManager ? sslManager.getStatus() : { enabled: false, available: false },
+            });
+        }
+        
         // GET /api/config - Get current configuration
         if (path === '/api/config' && method === 'GET') {
             return sendJson(res, 200, {
@@ -367,6 +378,7 @@ const handleAdminApi = async (req, res, path, middleware) => {
                         stealthMode: config.security.stealthMode,
                         trustProxy: config.security.trustProxy,
                     },
+                    ssl: sslManager ? sslManager.getStatus() : { enabled: false },
                 },
             });
         }
@@ -377,6 +389,7 @@ const handleAdminApi = async (req, res, path, middleware) => {
                 success: true,
                 rateLimit: limiter.getStats(),
                 botDetection: middleware.botDetection.detector.getStats(),
+                ssl: sslManager ? sslManager.getStats() : { enabled: false },
                 upstreams: currentUpstreams.length,
                 uptime: process.uptime(),
                 memory: process.memoryUsage(),
@@ -397,6 +410,7 @@ const handleAdminApi = async (req, res, path, middleware) => {
                 'GET  /api/blocked',
                 'POST /api/block',
                 'POST /api/unblock',
+                'GET  /api/ssl',
                 'GET  /api/config',
                 'GET  /api/stats',
             ],
@@ -414,6 +428,15 @@ const handleAdminApi = async (req, res, path, middleware) => {
 const startServer = async () => {
     // Initialize components
     const middleware = initMiddleware();
+    
+    // Initialize SSL manager
+    const sslManager = new SSLManager({
+        enabled: config.ssl?.enabled !== false,
+        domain: config.ssl?.domain || process.env.SSL_DOMAIN,
+        certDir: config.ssl?.certDir || '/certs',
+        letsencryptDir: config.ssl?.letsencryptDir || '/etc/letsencrypt/live',
+        phishproxyCertDir: config.ssl?.phishproxyCertDir || '/phishproxy-certs',
+    });
     
     // Initialize discovery (may not be available)
     let discovery = null;
@@ -451,7 +474,7 @@ const startServer = async () => {
                 // Only run requestId and securityHeaders for API
                 middleware.requestId(req, res, () => {});
                 middleware.securityHeaders(req, res, () => {});
-                return handleAdminApi(req, res, path, middleware);
+                return handleAdminApi(req, res, path, middleware, sslManager);
             }
             
             // Run middleware for all other requests
@@ -481,6 +504,7 @@ const startServer = async () => {
                         rateLimit: middleware.rateLimit.limiter.getStats(),
                         botDetection: middleware.botDetection.detector.getStats(),
                         proxy: proxy.getStats(),
+                        ssl: sslManager.getStats(),
                         discovery: discovery ? discovery.getStats() : { available: false },
                         uptime: process.uptime(),
                         memory: process.memoryUsage(),
@@ -505,34 +529,78 @@ const startServer = async () => {
         }
     };
     
-    // Create server
-    const server = http.createServer(handleRequest);
+    // Create HTTP server
+    const httpServer = http.createServer(handleRequest);
+    
+    // Create HTTPS server if SSL is available
+    let httpsServer = null;
+    let httpsServer8443 = null;
+    
+    if (sslManager.credentials) {
+        httpsServer = sslManager.createServer(handleRequest);
+        httpsServer8443 = sslManager.createServer(handleRequest);
+        
+        // Watch for cert changes and reload
+        sslManager.startWatching(60000);
+        sslManager.onReload(() => {
+            if (httpsServer) {
+                sslManager.updateServerCredentials(httpsServer);
+            }
+            if (httpsServer8443) {
+                sslManager.updateServerCredentials(httpsServer8443);
+            }
+        });
+    }
     
     // Handle server errors
-    server.on('error', (err) => {
+    const handleServerError = (err, serverType, port) => {
         if (err.code === 'EADDRINUSE') {
-            logger.error(`Port ${config.server.port} is already in use`);
+            logger.error(`${serverType} port ${port} is already in use`);
         } else if (err.code === 'EACCES') {
-            logger.error(`Permission denied for port ${config.server.port}`);
+            logger.error(`Permission denied for ${serverType} port ${port}`);
         } else {
-            logger.error('Server error', { error: err.message });
+            logger.error(`${serverType} server error`, { error: err.message });
         }
-        process.exit(1);
-    });
+    };
+    
+    httpServer.on('error', (err) => handleServerError(err, 'HTTP', config.server.port));
+    if (httpsServer) {
+        httpsServer.on('error', (err) => handleServerError(err, 'HTTPS', 443));
+    }
+    if (httpsServer8443) {
+        httpsServer8443.on('error', (err) => handleServerError(err, 'HTTPS', 8443));
+    }
     
     // Start listening
-    server.listen(config.server.port, config.server.host, () => {
-        logger.info('DDoS Guardian started', {
+    httpServer.listen(config.server.port, config.server.host, () => {
+        logger.info('HTTP server started', {
             host: config.server.host,
             port: config.server.port,
-            upstreams: currentUpstreams,
-            autoDiscover: config.discovery.enabled,
-            env: config.env,
         });
-        
-        // Print startup banner
-        printBanner(currentUpstreams);
     });
+    
+    if (httpsServer) {
+        httpsServer.listen(443, config.server.host, () => {
+            logger.info('HTTPS server started', {
+                host: config.server.host,
+                port: 443,
+                certSource: sslManager.certSource,
+            });
+        });
+    }
+    
+    if (httpsServer8443) {
+        httpsServer8443.listen(8443, config.server.host, () => {
+            logger.info('HTTPS server started', {
+                host: config.server.host,
+                port: 8443,
+                certSource: sslManager.certSource,
+            });
+        });
+    }
+    
+    // Print startup banner
+    printBanner(currentUpstreams, sslManager);
     
     // Start auto-refresh if discovery is enabled and available
     if (discovery && discovery.isAvailable) {
@@ -562,9 +630,16 @@ const startServer = async () => {
             discovery.destroy();
         }
         
-        server.close(() => {
+        sslManager.destroy();
+        
+        const closeServers = [];
+        closeServers.push(new Promise(r => httpServer.close(r)));
+        if (httpsServer) closeServers.push(new Promise(r => httpsServer.close(r)));
+        if (httpsServer8443) closeServers.push(new Promise(r => httpsServer8443.close(r)));
+        
+        Promise.all(closeServers).then(() => {
             middleware.destroy();
-            logger.info('Server stopped');
+            logger.info('Servers stopped');
             process.exit(0);
         });
         
@@ -578,22 +653,28 @@ const startServer = async () => {
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     
-    return server;
+    return { httpServer, httpsServer, httpsServer8443 };
 };
 
 /**
  * Print startup banner
  */
-const printBanner = (upstreams) => {
+const printBanner = (upstreams, sslManager) => {
     const autoDiscover = config.discovery.enabled ? 'enabled' : 'disabled';
+    const sslStatus = sslManager.credentials ? `enabled (${sslManager.certSource})` : 'disabled';
     
     console.log('');
     console.log('╔════════════════════════════════════════════════════════╗');
     console.log('║              DDoS Guardian Started                     ║');
     console.log('╠════════════════════════════════════════════════════════╣');
-    console.log(`║  Listening: http://${config.server.host}:${config.server.port}`.padEnd(57) + '║');
+    console.log(`║  HTTP:  http://${config.server.host}:${config.server.port}`.padEnd(57) + '║');
+    if (sslManager.credentials) {
+        console.log(`║  HTTPS: https://${config.server.host}:443`.padEnd(57) + '║');
+        console.log(`║  HTTPS: https://${config.server.host}:8443`.padEnd(57) + '║');
+    }
     console.log(`║  Environment: ${config.env}`.padEnd(57) + '║');
     console.log(`║  Auto-Discover: ${autoDiscover}`.padEnd(57) + '║');
+    console.log(`║  SSL/TLS: ${sslStatus}`.padEnd(57) + '║');
     console.log(`║  Upstreams: ${upstreams.length}`.padEnd(57) + '║');
     console.log('╠════════════════════════════════════════════════════════╣');
     console.log('║  Protection:                                           ║');
