@@ -40,8 +40,15 @@ services:
       - BOT_DETECTION_ENABLED=${BOT_DETECTION_ENABLED:-true}
       - BOT_SCORE_THRESHOLD=${BOT_SCORE_THRESHOLD:-70}
 
+      # SSL
       - SSL_ENABLED=${SSL_ENABLED:-true}
       - SSL_DOMAIN=${SSL_DOMAIN:-}
+      
+      # IP Reputation (AbuseIPDB)
+      - ABUSEIPDB_API_KEY=${ABUSEIPDB_API_KEY:-}
+      - IP_REPUTATION_ENABLED=${IP_REPUTATION_ENABLED:-true}
+      - IP_REPUTATION_BLOCK_THRESHOLD=${IP_REPUTATION_BLOCK_THRESHOLD:-80}
+      - IP_REPUTATION_CHECK_MODE=${IP_REPUTATION_CHECK_MODE:-async}
       
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -76,6 +83,29 @@ volumes:
   guardian-data:
   guardian-certs:
 
+# ═══════════════════════════════════════════════════════════════════
+# IP REPUTATION (AbuseIPDB)
+# ═══════════════════════════════════════════════════════════════════
+# 
+# 1. Get free API key at: https://www.abuseipdb.com/account/api
+# 
+# 2. Set the key:
+#    ABUSEIPDB_API_KEY=your-api-key-here docker compose up -d
+#
+# 3. Or add to .env file:
+#    echo "ABUSEIPDB_API_KEY=your-api-key-here" >> .env
+#
+# Features:
+# - Auto-blocks IPs with abuse score >= 80 (configurable)
+# - Caches results for 1 hour to minimize API calls
+# - Free tier: 1000 checks/day
+# - Reports attacks back to AbuseIPDB
+#
+# API Endpoints:
+#   GET  /api/reputation         - Status & stats
+#   GET  /api/reputation/:ip     - Check specific IP
+#   POST /api/reputation/report  - Report abusive IP
+#
 # ═══════════════════════════════════════════════════════════════════
 # EXAMPLES:
 # ═══════════════════════════════════════════════════════════════════
