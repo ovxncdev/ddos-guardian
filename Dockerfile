@@ -15,9 +15,12 @@ RUN npm install --omit=dev
 # === Production Stage ===
 FROM node:20-alpine
 
-# Security: run as non-root user
-RUN addgroup -g 1001 guardian && \
-    adduser -u 1001 -G guardian -s /bin/sh -D guardian
+# Security: run as non-root user with docker group access
+# Group 113 is typically the docker group on the host
+RUN addgroup -g 113 docker && \
+    addgroup -g 1001 guardian && \
+    adduser -u 1001 -G guardian -s /bin/sh -D guardian && \
+    addgroup guardian docker
 
 WORKDIR /app
 
