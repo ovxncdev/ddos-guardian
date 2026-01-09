@@ -56,15 +56,45 @@ class Proxy {
         const list = Array.isArray(targets) ? targets : [targets];
         
         return list.map(target => {
-            const url = new URL(target);
-            return {
-                protocol: url.protocol,
-                host: url.hostname,
-                port: url.port || (url.protocol === 'https:' ? 443 : 80),
-                path: url.pathname,
-                original: target,
-            };
-        });
+            try {
+                const url = new URL(target);
+                return {
+                    protocol: url.protocol,
+                    host: url.hostname,
+                    port: url.port || (url.protocol === 'https:' ? 443 : 80),
+                    path: url.pathname,
+                    original: target,
+                };
+            } catch (e) {
+                logger.error('Invalid target URL', { target, error: e.message });
+                return null;
+            }
+        }).filter(Boolean);
+    }
+    
+    /**
+     * Update targets dynamically (for auto-discovery)
+     */
+    updateTargets(targets) {
+        const newTargets = this.parseTargets(targets);
+        
+        // Only update if changed
+        const oldUrls = this.targets.map(t => t.original).sort().join(',');
+        const newUrls = newTargets.map(t => t.original).sort().join(',');
+        
+        if (oldUrls !== newUrls) {
+            this.targets = newTargets;
+            this.currentTarget = 0; // Reset round-robin
+            
+            logger.info('Proxy targets updated', {
+                count: newTargets.length,
+                targets: newTargets.map(t => t.original),
+            });
+            
+            return true;
+        }
+        
+        return false;
     }
     
     /**
