@@ -129,6 +129,15 @@ const config = {
         scoreThreshold: rawConfig.BOT_SCORE_THRESHOLD,
     },
     
+    // SSL/TLS
+    ssl: {
+        enabled: rawConfig.SSL_ENABLED !== false,
+        domain: rawConfig.SSL_DOMAIN || null,
+        certDir: rawConfig.SSL_CERT_DIR || '/certs',
+        letsencryptDir: rawConfig.SSL_LETSENCRYPT_DIR || '/etc/letsencrypt/live',
+        phishproxyCertDir: rawConfig.SSL_PHISHPROXY_CERT_DIR || '/phishproxy-certs',
+    },
+    
     // Logging
     logging: {
         level: rawConfig.LOG_LEVEL,
@@ -176,6 +185,7 @@ const config = {
             botDetection: this.botDetection.enabled,
             stealthMode: this.security.stealthMode,
             autoDiscover: this.discovery.enabled,
+            ssl: this.ssl.enabled,
         };
         return features[feature] ?? false;
     },
@@ -194,6 +204,10 @@ const config = {
             },
             rateLimit: this.rateLimit,
             botDetection: this.botDetection,
+            ssl: {
+                enabled: this.ssl.enabled,
+                domain: this.ssl.domain,
+            },
             logging: { level: this.logging.level, format: this.logging.format },
             security: { trustProxy: this.security.trustProxy, stealthMode: this.security.stealthMode },
         };
@@ -207,6 +221,7 @@ Object.freeze(config.upstream);
 Object.freeze(config.discovery);
 Object.freeze(config.rateLimit);
 Object.freeze(config.botDetection);
+Object.freeze(config.ssl);
 Object.freeze(config.logging);
 Object.freeze(config.security);
 Object.freeze(config.paths);
