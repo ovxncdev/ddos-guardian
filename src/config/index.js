@@ -55,6 +55,36 @@ const loadConfig = () => {
 const rawConfig = loadConfig();
 
 /**
+ * Detect Docker socket path
+ */
+const detectDockerSocketPath = () => {
+    // User-specified path takes priority
+    if (rawConfig.DOCKER_SOCKET_PATH) {
+        return rawConfig.DOCKER_SOCKET_PATH;
+    }
+    
+    // Common socket paths
+    const socketPaths = [
+        '/var/run/docker.sock',
+        '/run/docker.sock',
+        `${process.env.HOME}/.docker/run/docker.sock`,
+        '/Users/Shared/docker/docker.sock', // macOS
+    ];
+    
+    for (const socketPath of socketPaths) {
+        try {
+            if (fs.existsSync(socketPath)) {
+                return socketPath;
+            }
+        } catch (e) {
+            // Ignore permission errors
+        }
+    }
+    
+    return null;
+};
+
+/**
  * Processed configuration object
  */
 const config = {
@@ -77,6 +107,13 @@ const config = {
         hosts: rawConfig.UPSTREAM_HOSTS 
             ? rawConfig.UPSTREAM_HOSTS.split(',').map(h => h.trim()).filter(Boolean)
             : [],
+    },
+    
+    // Auto-discovery
+    discovery: {
+        enabled: rawConfig.AUTO_DISCOVER,
+        interval: rawConfig.AUTO_DISCOVER_INTERVAL,
+        socketPath: detectDockerSocketPath(),
     },
     
     // Rate limiting
@@ -138,6 +175,7 @@ const config = {
         const features = {
             botDetection: this.botDetection.enabled,
             stealthMode: this.security.stealthMode,
+            autoDiscover: this.discovery.enabled,
         };
         return features[feature] ?? false;
     },
@@ -150,6 +188,10 @@ const config = {
             env: this.env,
             server: this.server,
             upstream: { hostCount: this.upstream.hosts.length },
+            discovery: { 
+                enabled: this.discovery.enabled, 
+                hasSocket: !!this.discovery.socketPath,
+            },
             rateLimit: this.rateLimit,
             botDetection: this.botDetection,
             logging: { level: this.logging.level, format: this.logging.format },
@@ -162,6 +204,7 @@ const config = {
 Object.freeze(config);
 Object.freeze(config.server);
 Object.freeze(config.upstream);
+Object.freeze(config.discovery);
 Object.freeze(config.rateLimit);
 Object.freeze(config.botDetection);
 Object.freeze(config.logging);
