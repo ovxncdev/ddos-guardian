@@ -1,9 +1,13 @@
 # DDoS Guardian - Standalone Docker Compose
 # 
-# Auto-discovers and protects all Docker containers.
+# A standalone DDoS protection layer that sits in front of any web service.
 #
 # Usage:
 #   docker-compose up -d
+#
+# Configuration:
+#   Set UPSTREAM_HOSTS to point to your backend service(s)
+#   Or set AUTO_DISCOVER=true to auto-detect Docker containers
 
 services:
   ddos-guardian:
@@ -21,9 +25,11 @@ services:
       - PORT=80
       - HOST=0.0.0.0
       
-      # Auto-discovery (leave empty to auto-detect)
-      - UPSTREAM_HOSTS=${UPSTREAM_HOSTS:-}
+      # Auto-discovery - detects running containers automatically
       - AUTO_DISCOVER=${AUTO_DISCOVER:-true}
+      
+      # Manual upstream (used if AUTO_DISCOVER=false)
+      - UPSTREAM_HOSTS=${UPSTREAM_HOSTS:-}
       
       # Rate limiting
       - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-60000}
@@ -48,6 +54,7 @@ services:
       # Docker socket for auto-discovery
       - /var/run/docker.sock:/var/run/docker.sock:ro
     
+    # Allow connecting to host services
     extra_hosts:
       - "host.docker.internal:host-gateway"
     
@@ -61,3 +68,24 @@ services:
 volumes:
   guardian-logs:
   guardian-data:
+
+# ═══════════════════════════════════════════════════════════════════
+# EXAMPLES:
+# ═══════════════════════════════════════════════════════════════════
+#
+# 1. Auto-discover all containers (default):
+#    docker-compose up -d
+#
+# 2. Protect a service running on host port 8080:
+#    AUTO_DISCOVER=false UPSTREAM_HOSTS=http://host.docker.internal:8080 docker-compose up -d
+#
+# 3. Protect multiple services manually:
+#    AUTO_DISCOVER=false UPSTREAM_HOSTS=http://app1:3000,http://app2:8080 docker-compose up -d
+#
+# 4. Custom rate limit:
+#    RATE_LIMIT_MAX_REQUESTS=50 docker-compose up -d
+#
+# 5. Using .env file:
+#    Create .env file with your settings, then: docker-compose up -d
+#
+# ═══════════════════════════════════════════════════════════════════
