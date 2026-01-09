@@ -131,11 +131,11 @@ const config = {
     
     // SSL/TLS
     ssl: {
-        enabled: rawConfig.SSL_ENABLED !== false,
+        enabled: rawConfig.SSL_ENABLED,
         domain: rawConfig.SSL_DOMAIN || null,
-        certDir: rawConfig.SSL_CERT_DIR || '/certs',
-        letsencryptDir: rawConfig.SSL_LETSENCRYPT_DIR || '/etc/letsencrypt/live',
-        phishproxyCertDir: rawConfig.SSL_PHISHPROXY_CERT_DIR || '/phishproxy-certs',
+        certDir: rawConfig.SSL_CERT_DIR,
+        letsencryptDir: rawConfig.SSL_LETSENCRYPT_DIR,
+        phishproxyCertDir: rawConfig.SSL_PHISHPROXY_CERT_DIR,
     },
     
     // Logging
