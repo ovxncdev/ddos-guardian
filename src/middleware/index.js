@@ -8,6 +8,7 @@
  *     securityHeadersMiddleware,
  *     loggerMiddleware,
  *     botDetectionMiddleware,
+ *     ipReputationMiddleware,
  *   } = require('./middleware');
  */
 
@@ -16,6 +17,7 @@ const requestIdMiddleware = require('./request-id');
 const securityHeadersMiddleware = require('./security-headers');
 const loggerMiddleware = require('./logger');
 const botDetectionMiddleware = require('./bot-detection');
+const ipReputationMiddleware = require('./ip-reputation');
 
 module.exports = {
     rateLimitMiddleware,
@@ -23,4 +25,5 @@ module.exports = {
     securityHeadersMiddleware,
     loggerMiddleware,
     botDetectionMiddleware,
+    ipReputationMiddleware,
 };
