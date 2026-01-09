@@ -52,7 +52,7 @@ services:
       - guardian-logs:/var/log/ddos-guardian
       - guardian-data:/var/lib/ddos-guardian
       # Docker socket for auto-discovery
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     
     # Allow connecting to host services
     extra_hosts:
