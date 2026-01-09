@@ -1,0 +1,44 @@
+# Dependencies
+node_modules
+
+# Logs
+logs
+*.log
+
+# Data
+data
+temp
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.docker
+
+# Tests
+tests
+coverage
+*.test.js
+
+# Docs
+README.md
+docs
+*.md
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
