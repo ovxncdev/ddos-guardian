@@ -138,6 +138,16 @@ const config = {
         phishproxyCertDir: rawConfig.SSL_PHISHPROXY_CERT_DIR,
     },
     
+    // IP Reputation
+    ipReputation: {
+        enabled: rawConfig.IP_REPUTATION_ENABLED,
+        apiKey: rawConfig.ABUSEIPDB_API_KEY || null,
+        blockThreshold: rawConfig.IP_REPUTATION_BLOCK_THRESHOLD,
+        warnThreshold: rawConfig.IP_REPUTATION_WARN_THRESHOLD,
+        checkMode: rawConfig.IP_REPUTATION_CHECK_MODE,
+        cacheTTL: rawConfig.IP_REPUTATION_CACHE_TTL,
+    },
+    
     // Logging
     logging: {
         level: rawConfig.LOG_LEVEL,
@@ -186,6 +196,7 @@ const config = {
             stealthMode: this.security.stealthMode,
             autoDiscover: this.discovery.enabled,
             ssl: this.ssl.enabled,
+            ipReputation: this.ipReputation.enabled && !!this.ipReputation.apiKey,
         };
         return features[feature] ?? false;
     },
@@ -208,6 +219,11 @@ const config = {
                 enabled: this.ssl.enabled,
                 domain: this.ssl.domain,
             },
+            ipReputation: {
+                enabled: this.ipReputation.enabled,
+                hasApiKey: !!this.ipReputation.apiKey,
+                blockThreshold: this.ipReputation.blockThreshold,
+            },
             logging: { level: this.logging.level, format: this.logging.format },
             security: { trustProxy: this.security.trustProxy, stealthMode: this.security.stealthMode },
         };
@@ -222,6 +238,7 @@ Object.freeze(config.discovery);
 Object.freeze(config.rateLimit);
 Object.freeze(config.botDetection);
 Object.freeze(config.ssl);
+Object.freeze(config.ipReputation);
 Object.freeze(config.logging);
 Object.freeze(config.security);
 Object.freeze(config.paths);
