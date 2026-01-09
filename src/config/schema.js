@@ -94,6 +94,35 @@ const schema = Joi.object({
         .default('/phishproxy-certs')
         .description('PhishProxy shared certificates directory'),
     // ===================
+    // IP REPUTATION
+    // ===================
+    ABUSEIPDB_API_KEY: Joi.string()
+        .allow('')
+        .default('')
+        .description('AbuseIPDB API key for IP reputation checks'),
+    IP_REPUTATION_ENABLED: Joi.boolean()
+        .default(true)
+        .description('Enable IP reputation checking'),
+    IP_REPUTATION_BLOCK_THRESHOLD: Joi.number()
+        .min(0)
+        .max(100)
+        .default(80)
+        .description('Block IPs with abuse score >= this value'),
+    IP_REPUTATION_WARN_THRESHOLD: Joi.number()
+        .min(0)
+        .max(100)
+        .default(50)
+        .description('Log warning for IPs with score >= this value'),
+    IP_REPUTATION_CHECK_MODE: Joi.string()
+        .valid('sync', 'async')
+        .default('async')
+        .description('Check mode: sync (wait) or async (background)'),
+    IP_REPUTATION_CACHE_TTL: Joi.number()
+        .integer()
+        .min(60000)
+        .default(3600000)
+        .description('Cache TTL for reputation results (ms)'),
+    // ===================
     // LOGGING
     // ===================
     LOG_LEVEL: Joi.string()
