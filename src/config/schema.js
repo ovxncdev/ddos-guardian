@@ -33,6 +33,7 @@ const schema = Joi.object({
     // UPSTREAM SERVICES
     // ===================
     UPSTREAM_HOSTS: Joi.string()
+        .allow('')
         .default('')
         .description('Comma-separated list of upstream service URLs'),
 
